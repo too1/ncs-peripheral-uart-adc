@@ -512,7 +512,18 @@ static int16_t m_sample_buffer[BUFFER_SIZE];
 struct k_timer my_timer;
 const struct device *adc_dev;
 
-static int adc_sample(void)
+#define ADC_STACK_SIZE 512
+#define ADC_PRIORITY 5
+
+K_THREAD_STACK_DEFINE(adc_stack_area, ADC_STACK_SIZE);
+
+struct k_work_q adc_work_q;
+
+struct adc_work_info_t {
+	struct k_work work;
+} adc_work_info;
+
+void adc_sample(struct k_work *item)
 {
 	int ret;
 
@@ -523,27 +534,20 @@ static int adc_sample(void)
 		.resolution = ADC_RESOLUTION,
 	};
 
-	if (!adc_dev) {
-		return -1;
-	}
+	if (adc_dev) {
+		ret = adc_read(adc_dev, &sequence);
+		if (ret) {
+			printk("adc_read() failed with code %d\n", ret);
+		}
 
-	ret = adc_read(adc_dev, &sequence);
-	if (ret) {
-        //printk("adc_read() failed with code %d\n", ret);
+		for (int i = 0; i < BUFFER_SIZE; i++) {
+			printk("ADC raw value: %d\n", m_sample_buffer[i]);
+		}
 	}
-
-	for (int i = 0; i < BUFFER_SIZE; i++) {
-		//printk("ADC raw value: %d\n", m_sample_buffer[i]);
-	}
-
-	return ret;
 }
 
 void adc_sample_event(struct k_timer *timer_id){
-    int err = adc_sample();
-    if (err) {
-        printk("Error in adc sampling: %d\n", err);
-    }
+	k_work_submit(&adc_work_info.work);
 }
 
 void main(void)
@@ -583,11 +587,11 @@ void main(void)
 		return;
 	}
 
-	/*err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd,
+	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd,
 			      ARRAY_SIZE(sd));
 	if (err) {
 		LOG_ERR("Advertising failed to start (err %d)", err);
-	}*/
+	}
 
 	//ADC0 setup
     adc_dev = device_get_binding(ADC_DEVICE_NAME);
@@ -599,6 +603,11 @@ void main(void)
     if (err) {
 	    printk("Error in adc setup: %d\n", err);
 	}
+
+	k_work_q_start(&adc_work_q, adc_stack_area,
+               K_THREAD_STACK_SIZEOF(adc_stack_area), ADC_PRIORITY);
+
+	k_work_init(&adc_work_info.work, adc_sample);
 
 	//Timer setup
     k_timer_init(&my_timer, adc_sample_event, NULL);
