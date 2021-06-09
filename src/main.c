@@ -11,6 +11,7 @@
 #include <zephyr/types.h>
 #include <zephyr.h>
 #include <drivers/uart.h>
+#include <drivers/adc.h>
 
 #include <device.h>
 #include <soc.h>
@@ -52,6 +53,22 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 #define UART_WAIT_FOR_RX CONFIG_BT_NUS_UART_RX_WAIT_TIME
 
 static K_SEM_DEFINE(ble_init_ok, 0, 1);
+
+/*ADC definitions and includes*/
+#include <hal/nrf_saadc.h>
+#define ADC_DEVICE_NAME DT_LABEL(DT_INST(0, nordic_nrf_saadc))
+#define ADC_RESOLUTION 10
+#define ADC_GAIN ADC_GAIN_1_6
+#define ADC_REFERENCE ADC_REF_INTERNAL
+#define ADC_ACQUISITION_TIME ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)
+#define ADC_1ST_CHANNEL_ID 0  
+#define ADC_1ST_CHANNEL_INPUT NRF_SAADC_INPUT_AIN0
+
+#define PWM_DEVICE_NAME DT_PROP(DT_NODELABEL(pwm0), label)
+#define PWM_CH0_PIN DT_PROP(DT_NODELABEL(pwm0), ch0_pin)
+
+#define TIMER_INTERVAL_MSEC 200
+#define BUFFER_SIZE 1
 
 static struct bt_conn *current_conn;
 static struct bt_conn *auth_conn;
@@ -480,6 +497,55 @@ static void configure_gpio(void)
 	}
 }
 
+static const struct adc_channel_cfg m_1st_channel_cfg = {
+	.gain = ADC_GAIN,
+	.reference = ADC_REFERENCE,
+	.acquisition_time = ADC_ACQUISITION_TIME,
+	.channel_id = ADC_1ST_CHANNEL_ID,
+#if defined(CONFIG_ADC_CONFIGURABLE_INPUTS)
+	.input_positive = ADC_1ST_CHANNEL_INPUT,
+#endif
+};
+
+static int16_t m_sample_buffer[BUFFER_SIZE];
+
+struct k_timer my_timer;
+const struct device *adc_dev;
+
+static int adc_sample(void)
+{
+	int ret;
+
+	const struct adc_sequence sequence = {
+		.channels = BIT(ADC_1ST_CHANNEL_ID),
+		.buffer = m_sample_buffer,
+		.buffer_size = sizeof(m_sample_buffer),
+		.resolution = ADC_RESOLUTION,
+	};
+
+	if (!adc_dev) {
+		return -1;
+	}
+
+	ret = adc_read(adc_dev, &sequence);
+	if (ret) {
+        //printk("adc_read() failed with code %d\n", ret);
+	}
+
+	for (int i = 0; i < BUFFER_SIZE; i++) {
+		//printk("ADC raw value: %d\n", m_sample_buffer[i]);
+	}
+
+	return ret;
+}
+
+void adc_sample_event(struct k_timer *timer_id){
+    int err = adc_sample();
+    if (err) {
+        printk("Error in adc sampling: %d\n", err);
+    }
+}
+
 void main(void)
 {
 	int blink_status = 0;
@@ -517,11 +583,26 @@ void main(void)
 		return;
 	}
 
-	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd,
+	/*err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd,
 			      ARRAY_SIZE(sd));
 	if (err) {
 		LOG_ERR("Advertising failed to start (err %d)", err);
+	}*/
+
+	//ADC0 setup
+    adc_dev = device_get_binding(ADC_DEVICE_NAME);
+	if (!adc_dev) {
+        printk("device_get_binding ADC_0 (=%s) failed\n", ADC_DEVICE_NAME);
+    } 
+    
+    err = adc_channel_setup(adc_dev, &m_1st_channel_cfg);
+    if (err) {
+	    printk("Error in adc setup: %d\n", err);
 	}
+
+	//Timer setup
+    k_timer_init(&my_timer, adc_sample_event, NULL);
+    k_timer_start(&my_timer, K_MSEC(TIMER_INTERVAL_MSEC), K_MSEC(TIMER_INTERVAL_MSEC));
 
 	printk("Starting Nordic UART service example\n");
 
