@@ -523,9 +523,12 @@ struct adc_work_info_t {
 	struct k_work work;
 } adc_work_info;
 
+struct uart_data_t *adc_samples = 0;
+
 void adc_sample(struct k_work *item)
 {
 	int ret;
+	static int cnt = 0;
 
 	const struct adc_sequence sequence = {
 		.channels = BIT(ADC_1ST_CHANNEL_ID),
@@ -533,6 +536,10 @@ void adc_sample(struct k_work *item)
 		.buffer_size = sizeof(m_sample_buffer),
 		.resolution = ADC_RESOLUTION,
 	};
+
+	if(adc_samples == 0){
+		adc_samples = k_malloc(sizeof(*adc_samples));
+	}
 
 	if (adc_dev) {
 		ret = adc_read(adc_dev, &sequence);
@@ -542,6 +549,13 @@ void adc_sample(struct k_work *item)
 
 		for (int i = 0; i < BUFFER_SIZE; i++) {
 			printk("ADC raw value: %d\n", m_sample_buffer[i]);
+			adc_samples->data[cnt++] = m_sample_buffer[i];
+			if(cnt >= UART_BUF_SIZE){
+				cnt = 0;
+				adc_samples->len = UART_BUF_SIZE;
+				k_fifo_put(&fifo_uart_rx_data, adc_samples);
+				adc_samples = k_malloc(sizeof(*adc_samples));
+			}
 		}
 	}
 }
